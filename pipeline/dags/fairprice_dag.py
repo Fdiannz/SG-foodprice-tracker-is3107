@@ -29,10 +29,14 @@ CATEGORIES = [
     "rice-noodles-cooking-ingredients",
     "fruits-vegetables",
     "meat-seafood",
-    "frozen",
-    "snacks-and-confectionery",
-    "condiments-and-sauces",
-    "breakfast-and-spreads",
+    "frozen-food",
+    "frozen-meat",
+    "frozen-seafood",
+    "snacks",
+    "dried-fruits--nuts",
+    "food-cupboard-6",
+    "sweets-1",
+    "chocolates-1"
 ]
 
 HEADERS = {
@@ -44,7 +48,7 @@ HEADERS = {
 }
 
 # Update this to your actual project path
-RAW_DATA_PATH = os.path.expanduser("~/SG-foodprice-tracker/fairprice-pipeline/data/raw/fairprice")
+RAW_DATA_PATH = os.path.expanduser("~/Documents/GitHub/SG-foodprice-tracker/data/raw/fairprice")
 
 
 # ── DAG DEFINITION ────────────────────────────────────────────────────────────
@@ -94,6 +98,9 @@ def fairprice_pipeline():
             meta = item.get("metaData", {})
             unit = meta.get("DisplayUnit") or meta.get("Unit Of Weight")
 
+            slug = item.get("slug")
+            product_url = f"https://www.fairprice.com.sg/product/{slug}" if slug else None
+
             return {
                 "name": item.get("name"),
                 "brand": brand_name,
@@ -104,6 +111,7 @@ def fairprice_pipeline():
                 "main_category": main_category,
                 "subcategory": subcategory,
                 "category_slug": category_slug,
+                "product_url": product_url,
                 "store": "fairprice",
                 "scraped_at": datetime.now().isoformat(),
             }
@@ -123,7 +131,7 @@ def fairprice_pipeline():
                 }
 
                 try:
-                    response = requests.get(BASE_URL, headers=HEADERS, params=params, timeout=15)
+                    response = requests.get(BASE_URL, headers=HEADERS, params=params, timeout=30)
                 except requests.exceptions.RequestException as e:
                     print(f"Request error on {category_slug} page {page}: {e}")
                     break
