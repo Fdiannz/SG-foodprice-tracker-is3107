@@ -31,7 +31,7 @@ PAGE_LOAD_TIMEOUT = 15_000   # ms
 SCROLL_PAUSE      = 2_500    # ms
 MAX_STALE_SCROLLS = 3
 
-RAW_DATA_PATH = os.path.expanduser("~/Documents/GitHub/SG-foodprice-tracker/data/raw/shengsiong")
+RAW_DATA_PATH = os.path.expanduser("~/Documents/GitHub/SG-foodprice-tracker/shengsiong-pipeline/data/raw/shengsiong")
 
 
 # ── DAG DEFINITION ────────────────────────────────────────────────────────────
