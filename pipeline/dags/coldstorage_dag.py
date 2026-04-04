@@ -26,7 +26,7 @@ CATEGORIES = [
 @dag(
     dag_id="coldstorage_scraper",
     description="Scrapes Cold Storage product prices daily and saves raw JSON",
-    schedule="30 9 * * *",
+    schedule="0 15 * * *",   # runs every day at 3pm
     start_date=datetime(2026, 4, 2),
     catchup=False,
     tags=["coldstorage", "scraping"],

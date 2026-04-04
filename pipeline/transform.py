@@ -8,7 +8,7 @@
 #   - FairPrice: cast price fields from str -> float, null out zero discounts
 #   - Sheng Siong: prepend base URL to relative product_url
 #   - RedMart: strip query string from product_url
-#   - All stores: unified_category = category_slug (placeholder for manual mapping)
+#   - All stores: map category_slug -> unified_category, drop excluded categories
 #   - All stores: drop store-specific fields not in unified schema
 
 import json
@@ -23,6 +23,54 @@ PROC_BASE = os.path.join("data", "processed")
 STORES = ["fairprice", "shengsiong", "redmart", "coldstorage"]
 
 SHENGSIONG_BASE_URL = "https://shengsiong.com.sg"
+
+# Maps each store's category_slug to a unified category name.
+# Slugs not in this map are excluded from the processed output.
+UNIFIED_CATEGORY_MAP = {
+    # FairPrice
+    "dairy-chilled-eggs":               "Dairy",
+    "fruits-vegetables":                "Fruits & Vegetables",
+    "snacks":                           "Snacks & Confectionery",
+    "sweets-1":                         "Snacks & Confectionery",
+    "chocolates-1":                     "Snacks & Confectionery",
+    "rice-noodles-cooking-ingredients": "Staples",
+    "food-cupboard-6":                  "Staples",
+    "dried-fruits--nuts":               "Staples",
+    "meat-seafood":                     "Meat & Seafood",
+    "drinks":                           "Beverages",
+    "bakery":                           "Bakery & Breakfast",
+
+    # Sheng Siong
+    "dairy-chilled-eggs":               "Dairy",
+    "fruits":                           "Fruits & Vegetables",
+    "vegetables":                       "Fruits & Vegetables",
+    "snacks-confectioneries":           "Snacks & Confectionery",
+    "rice-noodles-pasta":               "Staples",
+    "meat-poultry-seafood":             "Meat & Seafood",
+    "beverages":                        "Beverages",
+    "breakfast-spreads":                "Bakery & Breakfast",
+    "cooking-baking":                   "Bakery & Breakfast",
+
+    # RedMart
+    "dairy-chilled-eggs":               "Dairy",
+    "fruits":                           "Fruits & Vegetables",
+    "vegetables":                       "Fruits & Vegetables",
+    "snack-and-confectionery":          "Snacks & Confectionery",
+    "rice-noodles-cooking-ingredients": "Staples",
+    "meat":                             "Meat & Seafood",
+    "seafood":                          "Meat & Seafood",
+    "drinks":                           "Beverages",
+    "bakery-breakfast":                 "Bakery & Breakfast",
+
+    # Cold Storage
+    "dairy-chilled-eggs":               "Dairy",
+    "fruits-vegetables":                "Fruits & Vegetables",
+    "snacks-confectionery":             "Snacks & Confectionery",
+    "rice-oil-noodles":                 "Staples",
+    "meat-seafood":                     "Meat & Seafood",
+    "beverages":                        "Beverages",
+    "breakfast-bakery":                 "Bakery & Breakfast",
+}
 
 
 # ── FIELD CLEANERS ────────────────────────────────────────────────────────────
@@ -65,7 +113,13 @@ def clean_product_url(url, store):
 
 # ── UNIFIED SCHEMA ────────────────────────────────────────────────────────────
 
-def build_unified(product: dict, store: str) -> dict:
+def build_unified(product: dict, store: str) -> dict | None:
+    """Returns None if the category is not in the unified map (i.e. excluded)."""
+    slug = product.get("category_slug")
+    unified_category = UNIFIED_CATEGORY_MAP.get(slug)
+    if unified_category is None:
+        return None
+
     price          = to_float(product.get("price_sgd"))
     original_price = to_float(product.get("original_price_sgd"))
     discount       = clean_discount(
@@ -79,8 +133,8 @@ def build_unified(product: dict, store: str) -> dict:
         "original_price_sgd":  original_price,
         "discount_sgd":        discount,
         "unit":                product.get("unit"),
-        "unified_category":    product.get("category_slug"),   # placeholder
-        "category_slug":       product.get("category_slug"),
+        "unified_category":    unified_category,
+        "category_slug":       slug,
         "store":               store,
         "product_url":         clean_product_url(product.get("product_url"), store),
         "scraped_at":          product.get("scraped_at"),
@@ -111,6 +165,11 @@ def process_store(store: str, date_str: str):
             raw_products = json.load(f)
 
         cleaned = [build_unified(p, store) for p in raw_products]
+        cleaned = [p for p in cleaned if p is not None]
+
+        if not cleaned:
+            print(f"  [{store}] {fname:<50} skipped (excluded category)")
+            continue
 
         with open(proc_path, "w", encoding="utf-8") as f:
             json.dump(cleaned, f, indent=2, ensure_ascii=False)
