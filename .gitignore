@@ -6,7 +6,6 @@ venv/
 .DS_Store
 **/.DS_Store
 .ipynb_checkpoints/
-dataset/raw/
 dataset/processed/
 data/debug/
 pipeline/matching_design.md
