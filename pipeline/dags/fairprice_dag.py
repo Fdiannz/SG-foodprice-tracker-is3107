@@ -48,7 +48,7 @@ HEADERS = {
 }
 
 # Update this to your actual project path
-RAW_DATA_PATH = os.path.expanduser("~/Documents/GitHub/SG-foodprice-tracker/data/raw/fairprice")
+RAW_DATA_PATH = os.path.expanduser("~/SG-foodprice-tracker/fairprice-pipeline/data/raw/fairprice")
 
 
 # ── DAG DEFINITION ────────────────────────────────────────────────────────────
