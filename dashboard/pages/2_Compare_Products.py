@@ -1,103 +1,143 @@
 import streamlit as st
 import pandas as pd
-import plotly.express as px
 import plotly.graph_objects as go
+import plotly.express as px
 import sys, os
 sys.path.append(os.path.join(os.path.dirname(__file__), "../../pipeline/etl"))
 from load import get_client
 
-st.set_page_config(page_title="Compare Products", page_icon="🔍", layout="wide")
-st.title("🔍 Compare Products")
-st.caption("Search for any branded product and compare its price across stores.")
+st.set_page_config(page_title="Compare Products", layout="wide")
+
+st.markdown("""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:wght@300;400;500;600&display=swap');
+html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
+h1 { font-family: 'DM Serif Display', serif !important; font-size: 2.2rem !important;
+     letter-spacing: -0.02em; color: #1a1a1a; }
+h2 { font-family: 'DM Serif Display', serif !important; font-size: 1.4rem !important;
+     color: #1a1a1a; font-weight: 400 !important; }
+h3 { font-size: 0.72rem !important; font-weight: 600 !important;
+     letter-spacing: 0.1em; text-transform: uppercase; color: #888 !important; }
+[data-testid="metric-container"] {
+    background: #fff; border: 1px solid #ebe7e0;
+    border-radius: 10px; padding: 16px 20px !important;
+}
+[data-testid="metric-container"] label {
+    font-size: 0.72rem !important; font-weight: 500;
+    letter-spacing: 0.08em; text-transform: uppercase; color: #999;
+}
+[data-testid="metric-container"] [data-testid="stMetricValue"] {
+    font-family: 'DM Serif Display', serif !important; font-size: 1.8rem !important;
+}
+hr { border-color: #ebe7e0 !important; }
+</style>
+""", unsafe_allow_html=True)
 
 STORE_COLORS = {
-    "fairprice":   "#F5821F",
-    "redmart":     "#E31837",
-    "coldstorage": "#0066CC",
-    "shengsiong":  "#009B4E",
+    "fairprice": "#F5821F",
+    "redmart": "#C8102E",
+    "coldstorage": "#005BAC",
+    "shengsiong": "#00843D",
 }
 STORE_LABELS = {
-    "fairprice":   "FairPrice",
-    "redmart":     "RedMart",
+    "fairprice": "FairPrice",
+    "redmart": "RedMart",
     "coldstorage": "Cold Storage",
-    "shengsiong":  "Sheng Siong",
+    "shengsiong": "Sheng Siong",
 }
+
+PLOTLY_BASE = dict(
+    font=dict(family="DM Sans, sans-serif", size=13, color="#1a1a1a"),
+    plot_bgcolor="white",
+    paper_bgcolor="white",
+    margin=dict(t=30, b=10, l=10, r=80),
+)
+
+def apply_base_axes(fig):
+    fig.update_xaxes(gridcolor="#f0ede8", linecolor="#e0dbd2", zeroline=False)
+    fig.update_yaxes(gridcolor="rgba(0,0,0,0)", linecolor="rgba(0,0,0,0)", zeroline=False)
+    return fig
 
 def fetch_all(table, date_col):
     client = get_client()
-    all_rows = []
-    page = 0
-    page_size = 1000
+    rows, page = [], 0
     while True:
         res = (
-            client.table(table)
-            .select("*")
+            client.table(table).select("*")
             .order(date_col, desc=True)
-            .range(page * page_size, (page + 1) * page_size - 1)
+            .range(page * 1000, (page + 1) * 1000 - 1)
             .execute()
         )
         if not res.data:
             break
-        all_rows.extend(res.data)
-        if len(res.data) < page_size:
+        rows.extend(res.data)
+        if len(res.data) < 1000:
             break
         page += 1
-    return all_rows
+    return rows
 
 @st.cache_data(ttl=300)
-def load_recommendations():
-    rows = fetch_all("canonical_product_daily_recommendations", "scraped_date_sg")
-    df = pd.DataFrame(rows)
+def load_recs():
+    df = pd.DataFrame(fetch_all("canonical_product_daily_recommendations", "scraped_date_sg"))
     if df.empty:
         return df
     latest = df["scraped_date_sg"].max()
-    # Only show products seen in 2+ stores — otherwise no comparison to make
     return df[(df["scraped_date_sg"] == latest) & (df["stores_seen_for_day"] >= 2)]
 
 @st.cache_data(ttl=300)
-def load_prices():
-    rows = fetch_all("canonical_product_daily_prices", "scraped_date_sg")
-    df = pd.DataFrame(rows)
+def load_prices_today():
+    df = pd.DataFrame(fetch_all("canonical_product_daily_prices", "scraped_date_sg"))
     if df.empty:
         return df
     latest = df["scraped_date_sg"].max()
     return df[df["scraped_date_sg"] == latest]
 
-with st.spinner("Loading data..."):
-    df_rec = load_recommendations()
-    df_prices = load_prices()
+with st.spinner("Loading..."):
+    df_rec = load_recs()
+    df_prices = load_prices_today()
 
 if df_rec.empty:
     st.error("No data found.")
     st.stop()
 
+st.title("Compare Products")
+st.markdown(
+    "<p style='color:#888; font-size:0.9rem; margin-top:-12px'>"
+    "Only showing products matched across 2 or more stores — "
+    "comparisons are guaranteed to be identical items.</p>",
+    unsafe_allow_html=True
+)
+st.divider()
+
 # ── FILTERS ───────────────────────────────────────────────────────────────────
 
 col1, col2 = st.columns([1, 2])
 with col1:
-    categories = ["All"] + sorted(df_rec["unified_category"].dropna().unique().tolist())
-    selected_cat = st.selectbox("Category", categories)
+    cats = ["All"] + sorted(df_rec["unified_category"].dropna().unique().tolist())
+    selected_cat = st.selectbox("Category", cats)
 with col2:
-    search = st.text_input("Search product", placeholder="e.g. Milo, Pokka, Greek yogurt")
+    search = st.text_input("Search product", placeholder="Milo, Greek yogurt, soy sauce…")
 
 filtered = df_rec.copy()
 if selected_cat != "All":
     filtered = filtered[filtered["unified_category"] == selected_cat]
 if search:
-    filtered = filtered[filtered["canonical_name"].str.contains(search, case=False, na=False)]
+    filtered = filtered[
+        filtered["canonical_name"].str.contains(search, case=False, na=False)
+    ]
 
-st.markdown(f"**{len(filtered)} comparable products found**")
-st.divider()
+st.markdown(
+    f"<p style='color:#888; font-size:0.85rem'>{len(filtered):,} products found</p>",
+    unsafe_allow_html=True,
+)
 
 # ── PRODUCT TABLE ─────────────────────────────────────────────────────────────
 
 display = (
     filtered[[
-        "canonical_name", "canonical_brand", "unified_category",
-        "size_display", "stores_seen_for_day",
-        "cheapest_store", "cheapest_price_sgd",
-        "priciest_store", "priciest_price_sgd",
-        "price_spread_sgd",
+        "canonical_name", "canonical_brand", "unified_category", "size_display",
+        "stores_seen_for_day", "cheapest_store", "cheapest_price_sgd",
+        "priciest_store", "priciest_price_sgd", "price_spread_sgd",
     ]]
     .sort_values("price_spread_sgd", ascending=False)
     .reset_index(drop=True)
@@ -107,13 +147,13 @@ display["cheapest_store"] = display["cheapest_store"].map(STORE_LABELS).fillna(d
 display["priciest_store"] = display["priciest_store"].map(STORE_LABELS).fillna(display["priciest_store"])
 display.columns = [
     "Product", "Brand", "Category", "Size", "Stores",
-    "Cheapest Store", "Cheapest ($)",
-    "Priciest Store", "Priciest ($)", "Spread ($)",
+    "Cheapest Store", "Cheapest",
+    "Priciest Store", "Priciest", "Spread",
 ]
-for col in ["Cheapest ($)", "Priciest ($)", "Spread ($)"]:
-    display[col] = display[col].apply(lambda x: f"${x:.2f}" if pd.notna(x) else "-")
+for col in ["Cheapest", "Priciest", "Spread"]:
+    display[col] = display[col].apply(lambda x: f"${x:.2f}" if pd.notna(x) else "—")
 
-st.dataframe(display, use_container_width=True, hide_index=True)
+st.dataframe(display, width='stretch', hide_index=True)
 st.divider()
 
 # ── PRODUCT DETAIL ────────────────────────────────────────────────────────────
@@ -124,71 +164,164 @@ if filtered.empty:
     st.info("No products match your search.")
     st.stop()
 
-selected_name = st.selectbox(
+selected = st.selectbox(
     "Select a product for full store breakdown",
-    options=filtered["canonical_name"].tolist()
+    options=filtered["canonical_name"].tolist(),
 )
 
-if selected_name:
-    rec_row = filtered[filtered["canonical_name"] == selected_name].iloc[0]
-    price_rows = df_prices[df_prices["canonical_name"] == selected_name].copy()
+if selected:
+    rec = filtered[filtered["canonical_name"] == selected].iloc[0]
+    price_rows = df_prices[df_prices["canonical_name"] == selected].copy()
     price_rows["store_label"] = price_rows["store"].map(STORE_LABELS).fillna(price_rows["store"])
+    price_rows = price_rows.sort_values("price_sgd")
+
+    cheapest_label = STORE_LABELS.get(rec["cheapest_store"], rec["cheapest_store"])
+    priciest_label = STORE_LABELS.get(rec["priciest_store"], rec["priciest_store"])
 
     c1, c2, c3 = st.columns(3)
-    cheapest_label = STORE_LABELS.get(rec_row["cheapest_store"], rec_row["cheapest_store"])
-    priciest_label = STORE_LABELS.get(rec_row["priciest_store"], rec_row["priciest_store"])
-    c1.metric("Cheapest Store", cheapest_label, f"${rec_row['cheapest_price_sgd']:.2f}")
-    c2.metric("Priciest Store", priciest_label, f"${rec_row['priciest_price_sgd']:.2f}")
-    c3.metric("You save", f"${rec_row['price_spread_sgd']:.2f}", "by choosing cheapest store")
+    c1.metric("Cheapest store", cheapest_label, f"${rec['cheapest_price_sgd']:.2f}")
+    c2.metric("Priciest store", priciest_label, f"${rec['priciest_price_sgd']:.2f}")
+    c3.metric("You save", f"${rec['price_spread_sgd']:.2f}", "by choosing the cheapest store")
 
     if not price_rows.empty:
-        price_rows_sorted = price_rows.sort_values("price_sgd")
+        min_price = price_rows["price_sgd"].min()
 
-        # Horizontal bar chart — easier to read store names
         fig = go.Figure()
-        for _, row in price_rows_sorted.iterrows():
-            is_cheapest = row["is_cheapest_for_day"]
+        for _, row in price_rows.iterrows():
+            is_cheapest = row["price_sgd"] == min_price
             fig.add_trace(go.Bar(
                 y=[row["store_label"]],
                 x=[row["price_sgd"]],
                 orientation="h",
-                marker_color=STORE_COLORS.get(row["store"], "#888"),
-                text=f"${row['price_sgd']:.2f}",
+                marker_color=STORE_COLORS.get(row["store"], "#aaa"),
+                marker_line_width=3 if is_cheapest else 0,
+                marker_line_color="#1a1a1a" if is_cheapest else "rgba(0,0,0,0)",
+                text=f"  ${row['price_sgd']:.2f}",
                 textposition="outside",
                 name=row["store_label"],
                 hovertemplate=(
                     f"<b>{row['store_label']}</b><br>"
                     f"${row['price_sgd']:.2f}<br>"
-                    f"{row['store_product_name']}<extra></extra>"
+                    f"{row.get('store_product_name', '')}<extra></extra>"
                 ),
             ))
 
-        fig.update_layout(
-            showlegend=False,
-            plot_bgcolor="rgba(0,0,0,0)",
-            paper_bgcolor="rgba(0,0,0,0)",
-            xaxis=dict(
-                title="Price (SGD)",
-                gridcolor="rgba(0,0,0,0.08)",
-            ),
-            yaxis=dict(title=""),
-            height=280,
-            margin=dict(t=10, b=10, l=10, r=80),
-        )
-        st.plotly_chart(fig, use_container_width=True)
+        fig.update_layout(**PLOTLY_BASE, showlegend=False, height=240, xaxis_title="Price (SGD)")
+        apply_base_axes(fig)
+        st.plotly_chart(fig, width='stretch')
 
-        # Store breakdown table
+        st.markdown("### Store-level detail")
         detail = price_rows[[
-            "store_label", "store_product_name",
-            "price_sgd", "original_price_sgd",
-            "discount_sgd", "unit", "product_url"
+            "store_label", "store_product_name", "price_sgd",
+            "original_price_sgd", "discount_sgd", "unit", "product_url",
         ]].copy()
         detail["price_sgd"] = detail["price_sgd"].apply(lambda x: f"${x:.2f}")
         detail["original_price_sgd"] = detail["original_price_sgd"].apply(
-            lambda x: f"${x:.2f}" if pd.notna(x) and x else "-"
+            lambda x: f"${x:.2f}" if pd.notna(x) and x else "—"
         )
         detail["discount_sgd"] = detail["discount_sgd"].apply(
-            lambda x: f"${x:.2f}" if pd.notna(x) and x else "-"
+            lambda x: f"${x:.2f}" if pd.notna(x) and x else "—"
         )
-        detail.columns = ["Store", "Product Name", "Price", "Original Price", "Discount", "Unit", "URL"]
-        st.dataframe(detail, use_container_width=True, hide_index=True)
+        detail.columns = ["Store", "Product Name", "Price", "Original", "Discount", "Unit", "URL"]
+        st.dataframe(detail, width='stretch', hide_index=True)
+
+        # ── Match score breakdown ─────────────────────────────────────────────
+
+        st.markdown("### Why these products were matched")
+        st.caption(
+            "Scores from the matching algorithm per store pair. "
+            "Strong matches require score ≥ 0.93 with title similarity ≥ 0.82."
+        )
+
+        product_ids = price_rows["product_id"].tolist()
+        if product_ids:
+            client = get_client()
+            cand_res = (
+                client.table("product_match_candidates")
+                .select(
+                    "name_a,name_b,store_a,store_b,"
+                    "brand_score,size_score,title_score,variant_score,"
+                    "match_score,match_status,explanation"
+                )
+                .in_("product_id_a", product_ids)
+                .eq("match_status", "strong_match")
+                .limit(20)
+                .execute()
+            )
+            cands = pd.DataFrame(cand_res.data or [])
+
+            if not cands.empty:
+                for _, cand in cands.iterrows():
+                    sa = STORE_LABELS.get(cand["store_a"], cand["store_a"])
+                    sb = STORE_LABELS.get(cand["store_b"], cand["store_b"])
+                    with st.expander(f"{sa} vs {sb} — match score {cand['match_score']:.2f}"):
+                        mc1, mc2, mc3, mc4 = st.columns(4)
+                        mc1.metric("Brand", f"{cand['brand_score']:.2f}")
+                        mc2.metric("Size", f"{cand['size_score']:.2f}")
+                        mc3.metric("Title", f"{cand['title_score']:.2f}")
+                        mc4.metric("Variant", f"{cand['variant_score']:.2f}")
+                        st.caption(f"*{cand['name_a']}* → *{cand['name_b']}*")
+                        if cand.get("explanation"):
+                            st.caption(f"Algo notes: {cand['explanation']}")
+            else:
+                st.caption("No match candidate records found for this product.")
+
+    st.divider()
+
+    # ── Price history ─────────────────────────────────────────────────────────
+
+    st.subheader("Price history")
+    st.markdown("### How this product's price has moved across stores over time")
+
+    with st.spinner("Loading price history..."):
+        client_h = get_client()
+        hist_rows = []
+        p2 = 0
+        while True:
+            res2 = (
+                client_h.table("canonical_product_daily_prices")
+                .select("store,price_sgd,scraped_date_sg")
+                .eq("canonical_name", selected)
+                .order("scraped_date_sg", desc=False)
+                .range(p2 * 1000, (p2 + 1) * 1000 - 1)
+                .execute()
+            )
+            if not res2.data:
+                break
+            hist_rows.extend(res2.data)
+            if len(res2.data) < 1000:
+                break
+            p2 += 1
+
+    if hist_rows:
+        hist_df = pd.DataFrame(hist_rows)
+        hist_df["store_label"] = hist_df["store"].map(STORE_LABELS).fillna(hist_df["store"])
+
+        if hist_df["scraped_date_sg"].nunique() > 1:
+            fig_hist = px.line(
+                hist_df,
+                x="scraped_date_sg",
+                y="price_sgd",
+                color="store",
+                color_discrete_map=STORE_COLORS,
+                markers=True,
+                labels={
+                    "scraped_date_sg": "Date",
+                    "price_sgd": "Price (SGD)",
+                    "store": "Store",
+                },
+            )
+            for trace in fig_hist.data:
+                trace.name = STORE_LABELS.get(trace.name, trace.name)
+            fig_hist.update_layout(
+                **{**PLOTLY_BASE, "margin": dict(t=30, b=10, l=10, r=10)},
+                height=300,
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1, title=""),
+            )
+            apply_base_axes(fig_hist)
+            st.plotly_chart(fig_hist, width='stretch')
+        else:
+            st.info(
+                "Only one day of price data so far. "
+                "History will appear after the pipeline runs across multiple days."
+            )
