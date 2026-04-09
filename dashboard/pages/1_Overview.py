@@ -307,9 +307,9 @@ if not df_com.empty:
         ))
 
     fig_sav.update_layout(
-        **{**PLOTLY_BASE, "margin": dict(t=20, b=20, l=10, r=120)},
+        **{**PLOTLY_BASE, "margin": dict(t=40, b=20, l=10, r=130)},
         showlegend=False,
-        height=360,
+        height=270,
         xaxis_title="How much you save (SGD) by choosing the cheapest store",
     )
     apply_base_axes(fig_sav)
@@ -520,7 +520,7 @@ else:
                     color="cheapest_store",
                     color_discrete_map=STORE_COLORS,
                     barmode="stack",
-                    text=store_wins["pct"].apply(lambda x: f"{x:.0f}%" if x >= 8 else ""),
+                    text=store_wins["pct"].apply(lambda x: f"{x:.0f}%" if x >= 4 else ""),
                     labels={
                         "scraped_date_sg": "Date",
                         "pct": "Share (%)",
@@ -542,7 +542,7 @@ else:
                     trace.name = STORE_LABELS.get(trace.name, trace.name)
                 fig_t2.update_layout(
                     **{**PLOTLY_BASE, "margin": dict(t=20, b=100, l=60, r=20)},
-                    height=360,
+                    height=440,
                     yaxis_title="Share (%)",
                     yaxis_range=[0, 105],
                     legend=dict(

@@ -362,7 +362,7 @@ else:
                 color="cut", markers=True,
                 labels={"scraped_date": "Date", "avg_cheapest": "Avg Cheapest (SGD)", "cut": "Cut"},
             )
-            fig_h1.update_layout(**PLOTLY_BASE, height=300, margin=dict(t=30, b=10, l=10, r=10))
+            fig_h1.update_layout(**{**PLOTLY_BASE, "margin": dict(t=30, b=10, l=10, r=10)}, height=300)
             fig_h1.update_xaxes(gridcolor="#f0ede8", linecolor="#e0dbd2", zeroline=False)
             fig_h1.update_yaxes(gridcolor="#f0ede8", linecolor="#e0dbd2", zeroline=False)
             st.plotly_chart(fig_h1, width='stretch')
@@ -375,7 +375,7 @@ else:
                 color="cut", markers=True,
                 labels={"scraped_date": "Date", "avg_spread": "Avg Spread (SGD)", "cut": "Cut"},
             )
-            fig_h2.update_layout(**PLOTLY_BASE, height=300, margin=dict(t=30, b=10, l=10, r=10))
+            fig_h2.update_layout(**{**PLOTLY_BASE, "margin": dict(t=30, b=10, l=10, r=10)}, height=300)
             fig_h2.update_xaxes(gridcolor="#f0ede8", linecolor="#e0dbd2", zeroline=False)
             fig_h2.update_yaxes(gridcolor="#f0ede8", linecolor="#e0dbd2", zeroline=False)
             st.plotly_chart(fig_h2, width='stretch')
