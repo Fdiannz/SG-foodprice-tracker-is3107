@@ -58,13 +58,18 @@ def apply_base_axes(fig):
     fig.update_yaxes(gridcolor="rgba(0,0,0,0)", linecolor="rgba(0,0,0,0)", zeroline=False)
     return fig
 
-def fetch_all(table, date_col):
+def _fetch_latest_date(table, date_col):
+    client = get_client()
+    res = client.table(table).select(date_col).order(date_col, desc=True).limit(1).execute()
+    return res.data[0][date_col] if res.data else None
+
+def _fetch_for_date(table, date_col, date_val, columns="*"):
     client = get_client()
     rows, page = [], 0
     while True:
         res = (
-            client.table(table).select("*")
-            .order(date_col, desc=True)
+            client.table(table).select(columns)
+            .eq(date_col, date_val)
             .range(page * 1000, (page + 1) * 1000 - 1)
             .execute()
         )
@@ -76,21 +81,25 @@ def fetch_all(table, date_col):
         page += 1
     return rows
 
+FRESH_CATEGORIES = {"Fruits & Vegetables", "Meat & Seafood"}
+
 @st.cache_data(ttl=300)
 def load_recs():
-    df = pd.DataFrame(fetch_all("canonical_product_daily_recommendations", "scraped_date_sg"))
+    latest = _fetch_latest_date("canonical_product_daily_recommendations", "scraped_date_sg")
+    if not latest:
+        return pd.DataFrame()
+    df = pd.DataFrame(_fetch_for_date("canonical_product_daily_recommendations", "scraped_date_sg", latest))
     if df.empty:
         return df
-    latest = df["scraped_date_sg"].max()
-    return df[(df["scraped_date_sg"] == latest) & (df["stores_seen_for_day"] >= 2)]
+    df = df[df["stores_seen_for_day"] >= 2]
+    return df[~df["unified_category"].isin(FRESH_CATEGORIES)]
 
 @st.cache_data(ttl=300)
 def load_prices_today():
-    df = pd.DataFrame(fetch_all("canonical_product_daily_prices", "scraped_date_sg"))
-    if df.empty:
-        return df
-    latest = df["scraped_date_sg"].max()
-    return df[df["scraped_date_sg"] == latest]
+    latest = _fetch_latest_date("canonical_product_daily_prices", "scraped_date_sg")
+    if not latest:
+        return pd.DataFrame()
+    return pd.DataFrame(_fetch_for_date("canonical_product_daily_prices", "scraped_date_sg", latest))
 
 with st.spinner("Loading..."):
     df_rec = load_recs()
@@ -104,7 +113,8 @@ st.title("Compare Products")
 st.markdown(
     "<p style='color:#888; font-size:0.9rem; margin-top:-12px'>"
     "Only showing products matched across 2 or more stores — "
-    "comparisons are guaranteed to be identical items.</p>",
+    "comparisons are guaranteed to be identical items. "
+    "Fruits &amp; Vegetables and Meat &amp; Seafood are on the Fresh &amp; Commodity page.</p>",
     unsafe_allow_html=True
 )
 st.divider()

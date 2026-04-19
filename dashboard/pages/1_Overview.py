@@ -72,12 +72,38 @@ def apply_base_axes(fig):
     fig.update_yaxes(gridcolor="#f0ede8", linecolor="#e0dbd2", zeroline=False)
     return fig
 
-def fetch_all(table, date_col):
+def _fetch_latest_date(table, date_col):
+    client = get_client()
+    res = client.table(table).select(date_col).order(date_col, desc=True).limit(1).execute()
+    return res.data[0][date_col] if res.data else None
+
+def _fetch_for_date(table, date_col, date_val):
     client = get_client()
     rows, page = [], 0
     while True:
         res = (
             client.table(table).select("*")
+            .eq(date_col, date_val)
+            .range(page * 1000, (page + 1) * 1000 - 1)
+            .execute()
+        )
+        if not res.data:
+            break
+        rows.extend(res.data)
+        if len(res.data) < 1000:
+            break
+        page += 1
+    return rows
+
+def _fetch_since(table, date_col, days=30, columns="*"):
+    from datetime import date, timedelta
+    cutoff = (date.today() - timedelta(days=days)).isoformat()
+    client = get_client()
+    rows, page = [], 0
+    while True:
+        res = (
+            client.table(table).select(columns)
+            .gte(date_col, cutoff)
             .order(date_col, desc=True)
             .range(page * 1000, (page + 1) * 1000 - 1)
             .execute()
@@ -92,23 +118,22 @@ def fetch_all(table, date_col):
 
 @st.cache_data(ttl=300)
 def load_recs_today():
-    df = pd.DataFrame(fetch_all("canonical_product_daily_recommendations", "scraped_date_sg"))
-    if df.empty:
-        return df
-    latest = df["scraped_date_sg"].max()
-    return df[df["scraped_date_sg"] == latest]
+    latest = _fetch_latest_date("canonical_product_daily_recommendations", "scraped_date_sg")
+    if not latest:
+        return pd.DataFrame()
+    return pd.DataFrame(_fetch_for_date("canonical_product_daily_recommendations", "scraped_date_sg", latest))
 
 @st.cache_data(ttl=300)
 def load_recs_all():
-    return pd.DataFrame(fetch_all("canonical_product_daily_recommendations", "scraped_date_sg"))
+    cols = "canonical_product_id,scraped_date_sg,unified_category,cheapest_store,price_spread_sgd,stores_seen_for_day"
+    return pd.DataFrame(_fetch_since("canonical_product_daily_recommendations", "scraped_date_sg", days=30, columns=cols))
 
 @st.cache_data(ttl=300)
 def load_commodity():
-    df = pd.DataFrame(fetch_all("commodity_price_comparisons", "scraped_date"))
-    if df.empty:
-        return df
-    latest = df["scraped_date"].max()
-    return df[df["scraped_date"] == latest]
+    latest = _fetch_latest_date("commodity_price_comparisons", "scraped_date")
+    if not latest:
+        return pd.DataFrame()
+    return pd.DataFrame(_fetch_for_date("commodity_price_comparisons", "scraped_date", latest))
 
 with st.spinner("Loading..."):
     df = load_recs_today()
@@ -225,28 +250,38 @@ with col_r:
         df_multi.groupby(["unified_category", "cheapest_store"])
         .size().reset_index(name="count")
     )
-    pivot = heat.pivot(
-        index="unified_category",
-        columns="cheapest_store",
-        values="count"
-    ).fillna(0)
-    pivot.columns = [STORE_LABELS.get(c, c) for c in pivot.columns]
+    daily_tots = heat.groupby("unified_category")["count"].transform("sum")
+    heat["pct"] = (heat["count"] / daily_tots * 100).round(1)
+    heat["store_label"] = heat["cheapest_store"].map(STORE_LABELS).fillna(heat["cheapest_store"])
 
-    fig2 = px.imshow(
-        pivot,
-        color_continuous_scale="Oranges",
-        aspect="auto",
-        text_auto=True,
-        labels=dict(x="Store", y="", color="Products"),
+    fig2 = px.bar(
+        heat,
+        x="pct",
+        y="unified_category",
+        color="cheapest_store",
+        color_discrete_map=STORE_COLORS,
+        orientation="h",
+        barmode="stack",
+        text=heat["pct"].apply(lambda x: f"{x:.0f}%" if x >= 8 else ""),
+        labels={"pct": "Share of cheapest wins (%)", "unified_category": "", "cheapest_store": "Store"},
+        custom_data=["store_label", "count"],
     )
+    fig2.update_traces(
+        textposition="inside", insidetextanchor="middle",
+        textfont=dict(color="white", size=11),
+        hovertemplate="<b>%{customdata[0]}</b><br>%{x:.1f}% · %{customdata[1]:,} products<extra></extra>",
+    )
+    for trace in fig2.data:
+        trace.name = STORE_LABELS.get(trace.name, trace.name)
     fig2.update_layout(
-        **{**PLOTLY_BASE, "margin": dict(t=20, b=20, l=10, r=20)},
+        **{**PLOTLY_BASE, "margin": dict(t=10, b=20, l=10, r=20)},
         height=240,
-        coloraxis_showscale=False,
+        xaxis_range=[0, 100],
+        xaxis_title="Share of cheapest wins (%)",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1, title=""),
     )
-    fig2.update_xaxes(side="bottom", gridcolor="rgba(0,0,0,0)", linecolor="rgba(0,0,0,0)")
+    fig2.update_xaxes(gridcolor="#f0ede8", linecolor="#e0dbd2")
     fig2.update_yaxes(gridcolor="rgba(0,0,0,0)", linecolor="rgba(0,0,0,0)")
-    fig2.update_traces(textfont_size=12)
     st.plotly_chart(fig2, width='stretch')
 
 st.divider()
@@ -344,34 +379,33 @@ if not spread_df.empty:
         unsafe_allow_html=True
     )
 
-    fig3 = go.Figure()
-    categories = sorted(spread_df["unified_category"].dropna().unique())
+    cat_order = (
+        spread_df.groupby("unified_category")["price_spread_sgd"]
+        .median().sort_values(ascending=True).index.tolist()
+    )
     palette = px.colors.qualitative.Set2
 
-    for i, cat in enumerate(categories):
+    fig3 = go.Figure()
+    for i, cat in enumerate(cat_order):
         cat_data = spread_df[spread_df["unified_category"] == cat]["price_spread_sgd"]
-        fig3.add_trace(go.Violin(
-            y=cat_data,
+        fig3.add_trace(go.Box(
+            x=cat_data,
             name=cat,
-            box_visible=True,
-            meanline_visible=True,
-            line_color=palette[i % len(palette)],
-            fillcolor=palette[i % len(palette)],
-            opacity=0.7,
-            points="outliers",
-            hovertemplate=f"<b>{cat}</b><br>Spread: $%{{y:.2f}}<extra></extra>",
+            orientation="h",
+            marker_color=palette[i % len(palette)],
+            boxmean=True,
+            line_width=1.5,
+            hovertemplate=f"<b>{cat}</b><br>Spread: $%{{x:.2f}}<extra></extra>",
         ))
 
     fig3.update_layout(
-        **{**PLOTLY_BASE, "margin": dict(t=20, b=40, l=60, r=20)},
-        height=380,
+        **{**PLOTLY_BASE, "margin": dict(t=20, b=40, l=10, r=20)},
+        height=max(300, len(cat_order) * 45),
         showlegend=False,
-        yaxis_title="Price Spread (SGD)",
-        violingap=0.3,
-        violinmode="overlay",
+        xaxis_title="Price Spread (SGD)",
     )
     apply_base_axes(fig3)
-    fig3.update_xaxes(gridcolor="rgba(0,0,0,0)", linecolor="#e0dbd2")
+    fig3.update_yaxes(gridcolor="rgba(0,0,0,0)", linecolor="rgba(0,0,0,0)")
     st.plotly_chart(fig3, width='stretch')
 
 st.divider()
@@ -461,19 +495,41 @@ else:
                 st.markdown("#### Avg price spread over time")
                 st.caption("Higher spread = more savings available by comparing stores that day")
 
-                spread_trend = (
-                    hist_filtered[hist_filtered["stores_seen_for_day"] >= 2]
-                    .groupby(["scraped_date_sg", "unified_category"])
-                    .agg(avg_spread=("price_spread_sgd", "mean"))
-                    .reset_index()
-                )
+                by_cat = st.toggle("Break down by category", value=False, key="spread_by_cat")
+
+                spread_src = hist_filtered[hist_filtered["stores_seen_for_day"] >= 2]
+
+                if by_cat:
+                    spread_trend = (
+                        spread_src
+                        .groupby(["scraped_date_sg", "unified_category"])
+                        .agg(avg_spread=("price_spread_sgd", "mean"))
+                        .reset_index()
+                    )
+                    color_col = "unified_category"
+                    legend_cfg = dict(
+                        orientation="h", yanchor="top", y=-0.30,
+                        xanchor="left", x=0, title="", font=dict(size=11),
+                    )
+                    margin_b = 100
+                else:
+                    spread_trend = (
+                        spread_src
+                        .groupby("scraped_date_sg")
+                        .agg(avg_spread=("price_spread_sgd", "mean"))
+                        .reset_index()
+                    )
+                    spread_trend["unified_category"] = "All categories"
+                    color_col = "unified_category"
+                    legend_cfg = dict(visible=False)
+                    margin_b = 40
 
                 if not spread_trend.empty and spread_trend["scraped_date_sg"].nunique() > 1:
                     fig_t1 = px.line(
                         spread_trend,
                         x="scraped_date_sg",
                         y="avg_spread",
-                        color="unified_category",
+                        color=color_col,
                         markers=True,
                         labels={
                             "scraped_date_sg": "Date",
@@ -481,18 +537,14 @@ else:
                             "unified_category": "Category",
                         },
                     )
-                    fig_t1.update_traces(
-                        line=dict(width=2), marker=dict(size=7), connectgaps=False
-                    )
+                    fig_t1.update_traces(line=dict(width=2), marker=dict(size=7), connectgaps=False)
+                    if not by_cat:
+                        fig_t1.update_traces(line_color="#F5821F")
                     fig_t1.update_layout(
-                        **{**PLOTLY_BASE, "margin": dict(t=20, b=100, l=60, r=20)},
+                        **{**PLOTLY_BASE, "margin": dict(t=20, b=margin_b, l=60, r=20)},
                         height=360,
-                        legend=dict(
-                            orientation="h",
-                            yanchor="top", y=-0.30,
-                            xanchor="left", x=0,
-                            title="", font=dict(size=11),
-                        ),
+                        showlegend=by_cat,
+                        legend=legend_cfg,
                     )
                     apply_base_axes(fig_t1)
                     st.plotly_chart(fig_t1, width='stretch')
