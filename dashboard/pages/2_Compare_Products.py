@@ -174,14 +174,29 @@ if filtered.empty:
     st.info("No products match your search.")
     st.stop()
 
-selected = st.selectbox(
-    "Select a product for full store breakdown",
-    options=filtered["canonical_name"].tolist(),
+selection_df = (
+    filtered.sort_values(["canonical_name", "size_display", "canonical_product_id"])
+    .drop_duplicates(subset=["canonical_product_id"])
+    .copy()
+)
+selection_df["product_label"] = selection_df.apply(
+    lambda row: f"{row['canonical_name']} | {row['size_display']}"
+    if pd.notna(row.get("size_display")) and str(row.get("size_display")).strip()
+    else row["canonical_name"],
+    axis=1,
 )
 
-if selected:
-    rec = filtered[filtered["canonical_name"] == selected].iloc[0]
-    price_rows = df_prices[df_prices["canonical_name"] == selected].copy()
+selected_label = st.selectbox(
+    "Select a product for full store breakdown",
+    options=selection_df["product_label"].tolist(),
+)
+
+if selected_label:
+    rec = selection_df[selection_df["product_label"] == selected_label].iloc[0]
+    selected_canonical_product_id = rec["canonical_product_id"]
+    price_rows = df_prices[
+        df_prices["canonical_product_id"] == selected_canonical_product_id
+    ].copy()
     price_rows["store_label"] = price_rows["store"].map(STORE_LABELS).fillna(price_rows["store"])
     price_rows = price_rows.sort_values("price_sgd")
 
@@ -291,7 +306,7 @@ if selected:
             res2 = (
                 client_h.table("canonical_product_daily_prices")
                 .select("store,price_sgd,scraped_date_sg")
-                .eq("canonical_name", selected)
+                .eq("canonical_product_id", int(selected_canonical_product_id))
                 .order("scraped_date_sg", desc=False)
                 .range(p2 * 1000, (p2 + 1) * 1000 - 1)
                 .execute()
