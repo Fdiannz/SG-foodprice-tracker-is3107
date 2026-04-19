@@ -9,7 +9,6 @@
 # Libraries
 # =============================================================================
 import os
-import sys
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -21,8 +20,6 @@ load_dotenv()
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-
-print(f"Python: {sys.executable}")
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -141,11 +138,27 @@ prod_df["anomaly_flag"] = prod_df["anomaly_raw"].map({
     -1: "Anomalous"
 })
 
+# =============================================================================
+# Step 4: Statistics Summary
+# =============================================================================
+#Print total product + Anomalies flagged + Normal price product + Avg anomaly price range
 print("\nAnomaly flag counts:")
 print(prod_df["anomaly_flag"].value_counts())
 
+total = len(prod_df)
+anomalyCount = (prod_df["anomaly_flag"] == "Anomalous").sum()
+normalCount  = (prod_df["anomaly_flag"] == "Normal").sum()
+avg_anomaly_range = prod_df[prod_df["anomaly_flag"]=="Anomalous"]["price_range"].mean()
+avg_normal_range = prod_df[prod_df["anomaly_flag"]=="Normal"]["price_range"].mean()
+
+print(f"Total products: {total}")
+print(f"Anomalies flagged: {anomalyCount} ({anomalyCount/total*100:.1f}%)")
+print(f"Normal products: {normalCount}")
+print(f"Average anomaly price range: ${avg_anomaly_range:.2f}")
+print(f"Average normal price range : ${avg_normal_range:.2f}")
+
 # =============================================================================
-# Step 4: Show top anomalous products
+# Step 5: Show top anomalous products
 # =============================================================================
 print("\n[4a] Top anomalous products")
 
@@ -181,8 +194,53 @@ anomaly_summary = (
 )
 
 print(anomaly_summary.to_string())
+
 # =============================================================================
-# Step 5: Anomalies identification on Scatter
+# Step 6: Bar Chart of Anomalies by Category
+# =============================================================================
+# list of category
+categories = sorted(prod_df["unified_category"].unique())
+anomaly_category = (
+    prod_df[prod_df["anomaly_flag"] == "Anomalous"]
+    .groupby("unified_category")
+    .size()
+    .sort_values(ascending=False)
+)
+
+#Different color for different categories
+color_cat = {
+    "Fruits & Vegetables": "red",
+    "Staples": "blue",
+    "Beverages": "green",
+    "Meat & Seafood": "orange",
+    "Dairy & Eggs": "purple",
+    "Snacks": "pink",
+    "Household": "yellow"
+}
+colors_bar = [color_cat.get(cat, "#95a5a6") for cat in anomaly_category.index]
+
+# No. of anomaly product by category
+print("\nAnomalies by category:")
+print(anomaly_category)
+
+#Plot Bar Chart
+fig, ax = plt.subplots(figsize=(9, 5))
+anomaly_category.plot(kind="barh",
+                      ax=ax,
+                      color=colors_bar,
+                      edgecolor="white")
+
+for x, y in enumerate(anomaly_category.values):
+    ax.text(y + 0.05, x, str(y), va="center")
+ax.set_title("Anomalies by Category", fontsize=18, fontweight="bold")
+ax.set_xlabel("Number of anomalous products")
+ax.set_ylabel("Category")
+
+plt.tight_layout()
+plt.show()
+
+# =============================================================================
+# Step 7: Anomalies identification on Scatter
 # =============================================================================
 print("\n[5] Visualising anomalies...")
 
@@ -216,7 +274,7 @@ plt.savefig(os.path.join(OUTPUT_DIR, "anomaly_scatter.png"), dpi=150, bbox_inche
 plt.show()
 
 # =============================================================================
-# Step 6: Saving anomaly results
+# Step 8: Saving anomaly results
 # =============================================================================
 print("\n[6] Saving full anomaly results...")
 
@@ -241,7 +299,7 @@ anomaly_output = prod_df[anomaly_cols].copy()
 anomaly_output.to_csv(os.path.join(OUTPUT_DIR, "anomaly_results.csv"), index=False)
 
 # =============================================================================
-# Step 7: Final summary
+# Step 9: Final summary
 # =============================================================================
 print("\n" + "=" * 60)
 print("ANOMALY DETECTION SUMMARY")
