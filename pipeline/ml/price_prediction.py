@@ -1,7 +1,7 @@
 # =============================================================================
 # SG Food Price Tracker — Price Prediction
 # Model: Random Forest Regressor
-# Output: feature importance chart + predicted and actual chart
+# Output: predicted and actual chart + residuals chart + prediction results table
 # =============================================================================
 
 # =============================================================================
@@ -12,9 +12,8 @@ import numpy as np
 import pandas as pd
 from supabase import create_client, Client
 from dotenv import load_dotenv
-from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestRegressor
-from sklearn.metrics import mean_absolute_error, r2_score
+from sklearn.metrics import mean_absolute_error, r2_score, mean_squared_error
 
 import matplotlib
 matplotlib.use("Agg")
@@ -73,156 +72,127 @@ def run():
     df_raw = pd.DataFrame(all_data)
     print(f"  Total rows fetched: {len(df_raw)}")
 
-
     # =============================================================================
     # Step 2: Clean and engineer features
     # =============================================================================
     print("\n[2] Cleaning and engineering features...")
-
+    # Convert data types (price - numeric, date - date format)
     df_raw["price_sgd"] = pd.to_numeric(df_raw["price_sgd"], errors="coerce")
-    df_raw = df_raw.dropna(subset=["canonical_product_id", "canonical_name", "price_sgd"])
+    df_raw["scraped_date_sg"] = pd.to_datetime(df_raw["scraped_date_sg"], errors="coerce")
+    
+    #Remove rows wih missing info
+    df_raw = df_raw.dropna(subset=["canonical_product_id", 
+                           "canonical_name",
+                           "unified_category",
+                            "store",
+                            "scraped_date_sg",
+                            "price_sgd"
+                            ])
+    
+    # Only include products seen across 2+ stores
+    df_raw = df_raw[df_raw["matched_store_count_for_day"] >= 2].copy()
 
-    # Only include products seen across 2+ stores — single-store products
-    # cannot be meaningfully compared and skew the clustering
-    df_raw = df_raw[df_raw["matched_store_count_for_day"] >= 2]
+    # Sort by product, store, date
+    df = df_raw.sort_values(["canonical_product_id", "store", "scraped_date_sg"]).reset_index(drop=True)
 
-    # Aggregate to product level
-    prod_df = (
-        df_raw.groupby(["canonical_product_id"])
-        .agg(
-            canonical_name=("canonical_name", "first"),
-            unified_category=("unified_category", "first"),
-            mean_price=("price_sgd", "mean"),
-            median_price=("price_sgd", "median"),
-            min_price=("price_sgd", "min"),
-            max_price=("price_sgd", "max"),
-            std_price=("price_sgd", "std"),
-            num_observations=("price_sgd", "count"),
-            num_stores=("store", "nunique"),
-        )
-        .reset_index()
+    # create date features in dataset
+    df["month"] = df["scraped_date_sg"].dt.month
+    df["day_week"] = df["scraped_date_sg"].dt.dayofweek
+    df["day_month"] = df["scraped_date_sg"].dt.day
+
+    # grouping by same product in same store
+    grouped_prices = df.groupby(["canonical_product_id", "store"])["price_sgd"]
+
+    # for each product, take price from previous recorded price
+    df["move_price_1"] = grouped_prices.shift(1)
+
+    # mean price of 3 same product in same store from previous record (maybe prev day if there is data)
+    df["mean_3"] = (
+        df.groupby(["canonical_product_id", "store"])["move_price_1"]
+        .transform(lambda x: x.rolling(3, min_periods=1).mean())
     )
 
-    #After aggregation make final clustered products comparable across stores
-    prod_df = prod_df[prod_df["num_stores"] >= 2]
+    # drop rows without enough historical data
+    df = df.dropna(subset=["move_price_1", "mean_3"]).copy()
 
-    # Fill std for single-observation products
-    prod_df["std_price"] = prod_df["std_price"].fillna(0)
+    #Remove extreme price outliers
+    q1 = df["price_sgd"].quantile(0.25)
+    q3 = df["price_sgd"].quantile(0.75)
+    upper_cap = q3 + 3.0 * (q3 - q1)
+    df = df[df["price_sgd"] <= upper_cap].copy()
 
-    # Price range — absolute spread across all observations
-    prod_df["price_range"] = prod_df["max_price"] - prod_df["min_price"]
-
-    # Coefficient of variation — relative volatility (std / mean)
-    # High CV = price changes a lot relative to its average
-    # Low CV = stable pricing
-    prod_df["cv"] = prod_df["std_price"] / prod_df["mean_price"]
-    prod_df["cv"] = prod_df["cv"].fillna(0)
-
-    print(f"  Products after cleaning: {len(prod_df)}")
-    print(f"  Categories: {prod_df['unified_category'].nunique()}")
-    print(prod_df[["mean_price", "price_range", "cv", "num_stores"]].describe().round(3))
-
-    #Outlier removal
-    prod_df = prod_df.reset_index(drop=True)
-
-    def iqr(series, multiplier=3.0):
-        q1 = series.quantile(0.25)
-        q3 = series.quantile(0.75)
-        return q3 + multiplier * (q3 - q1)
-
-    mean_cap = iqr(prod_df["mean_price"])
-    range_cap = iqr(prod_df["price_range"])
-    cv_cap = iqr(prod_df["cv"])
-
-    outliers = (
-        (prod_df["mean_price"] > mean_cap) |
-        (prod_df["price_range"] > range_cap) |
-        (prod_df["cv"] > cv_cap)
-    )
-
-    print(f"  No. of removed before training: {outliers.sum()}")
-    prod_df = prod_df[~outliers].reset_index(drop=True)
-    print(f"  No. of products after outlier removal: {len(prod_df)}")
+    print(f"Rows after feature engineering: {len(df)}")
+    print(f"No. of products: {df['canonical_product_id'].nunique()}")
 
     # =============================================================================
-    # Step 3: Train Random Forest Model
+    # Step 3: Train random forest model
     # =============================================================================
+    # Label encoding for 7 categories & 4 stores
+    df["cat_encode"] = df["unified_category"].astype("category").cat.codes
+    df["store_encode"] = df["store"].astype("category").cat.codes
 
-    # Encode cat
-    prod_df["category_enc"] = prod_df["unified_category"].astype("category").cat.codes
-
-    FEATURES = ["price_range", "cv", "num_stores", "num_observations", "category_enc"]
-    X = prod_df[FEATURES]
-    y = prod_df["mean_price"]
+    FEATURES = ["cat_encode", 
+                "store_encode", 
+                "month","day_week",
+                "day_month",
+                "move_price_1",
+                "mean_3"
+            ]
+    X = df[FEATURES]
+    y = df["price_sgd"] #results to be price
 
     # Splitting for train-test, 80-20
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+    split_index = int(len(df) * 0.8)
 
-    # Train model
-    randomF = RandomForestRegressor(n_estimators=100, random_state=42)
-    randomF.fit(X_train, y_train)
+    #first 80% for training
+    X_train = X.iloc[:split_index]
+    y_train = y.iloc[:split_index]
+    #another 20% for testing
+    X_test = X.iloc[split_index:]
+    y_test = y.iloc[split_index:]
+
+    # Train model with Random Forest Regression
+    # collection of decision trees, each tree make prediction, final prediction is avg of all trees
+    model = RandomForestRegressor(
+        n_estimators=200,   #create 200 trees
+        max_depth=12,       #deepness of tree can grow
+        min_samples_leaf=2, #at least 2 row of data 
+        random_state=42,     #random
+    )
+    model.fit(X_train, y_train)
 
     # =============================================================================
     # Step 4: Evaluate
     # =============================================================================
-    y_pred = randomF.predict(X_test) 
+    # Fit model and predict on test set
+    y_pred = model.predict(X_test)
     mae = mean_absolute_error(y_test, y_pred)
+    rmse = mean_squared_error(y_test, y_pred) ** 0.5
     r2 = r2_score(y_test, y_pred)
 
-    print(f"MAE (Test):${mae:.3f}")
-    print(f"R² (Test): {r2:.4f}")
+    print(f"MAE(Test): ${mae:.3f}")
+    print(f"RMSE(Test): ${rmse:.3f}")
+    print(f"R²(Test): {r2:.4f}")
 
     # =============================================================================
-    # Step 5: Add Feature Importance bar chart
+    # Step 5: Predicted vs Actual price scatter
     # =============================================================================
-    # Which var does Random Forest relied on most to predict mean price?
-    print("\n[5] Plot feature importance bar chart")
+    print("\n[9] Plot predicted vs actual scatter plot")
 
-    feat = ["Price Range", "CV (Volatility)", "Num Stores", "Num Observations", "Category"]
-    sort_importances = randomF.feature_importances_
+    fig, ax = plt.subplots(figsize=(10, 10))
+    ax.scatter(y_test, y_pred, alpha=0.5, s=25, label="Products")
 
-    # sort features by importance score from small to big
-    score  = np.argsort(sort_importances)
-
-    names = []
-
-    for f in score:
-        names.append(feat[f])
-
-    importances = sort_importances[score]
-
-    colors = ["#1F77B4"] * len(importances)
-    colors[-1] = "orange"
-
-    fig, ax = plt.subplots(figsize=(9, 5))
-    bars = ax.barh(names, importances, color=colors, edgecolor="white")
-    ax.set_title("Price Prediction by Feature Importance (Random Forest) ", fontsize=12, fontweight="bold")
-    ax.set_xlabel("Importance Score")
-    for bar, value in zip(bars, importances):
-        ax.text(value + 0.002, bar.get_y() + bar.get_height() / 2,
-                f"{value:.3f}", va="center", fontsize=9)
-        
-    ax.spines["top"].set_visible(False)
-    ax.spines["right"].set_visible(False)
-    plt.tight_layout()
-    plt.savefig(os.path.join(OUTPUT_DIR, "feature_importance.png"), dpi=150, bbox_inches="tight")
-
-    # =============================================================================
-    # Step 6: Predicted vs Actual price scatter
-    # =============================================================================
-    # How close predicted prices are to the actual prices?
-    print("\n[6] Plot predicted vs actual price")
-
-    fig, ax = plt.subplots(figsize=(8, 8))
-    ax.scatter(y_test, y_pred, alpha=0.5, s=25, color="#005BAC", label="Products")
     min_v = min(y_test.min(), y_pred.min())
     max_v = max(y_test.max(), y_pred.max())
     limits = [min_v, max_v]
-    ax.plot(limits, limits, "r--", linewidth=1.5, label="Prediction")
-    ax.set_title(f"Predicted vs Actual Mean Price\nMAE=${mae:.2f}  R²={r2:.3f}",
-                fontsize=13, fontweight="bold")
-    ax.set_xlabel("Actual Mean Price (SGD)")
-    ax.set_ylabel("Predicted Mean Price (SGD)")
+
+    title = (f"Predicted vs Actual Price\n"
+             f"MAE = ${mae:.2f}   RMSE = ${rmse:.2f}   R² = {r2:.3f}"
+        )
+    ax.set_title(title, fontsize=13, fontweight="bold")
+    ax.plot(limits, limits, "r--", linewidth=1.5, label="Perfect Prediction")
+    ax.set_xlabel("Actual Price (SGD)")
+    ax.set_ylabel("Predicted Price (SGD)")
     ax.legend(fontsize=10)
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
@@ -230,15 +200,51 @@ def run():
     plt.savefig(os.path.join(OUTPUT_DIR, "actual_vs_predicted.png"), dpi=150, bbox_inches="tight")
 
     # =============================================================================
-    # Step 8: Summary
+    # Step 6: Residual Graph
+    # =============================================================================
+    residuals = y_test.values - y_pred
+    fig, ax = plt.subplots(figsize=(9, 5))
+    ax.scatter(y_pred, residuals, alpha=0.4, s=20, color="#2266AA")
+    ax.axhline(0, color="#871616", linewidth=1.5, linestyle="--")
+    ax.set_title("Residuals: Predicted Price vs Error", fontsize=13, fontweight="bold")
+    ax.set_xlabel("Predicted price (SGD)")
+    ax.set_ylabel("Residual")
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    plt.tight_layout()
+    plt.savefig(os.path.join(OUTPUT_DIR, "residuals.png"), dpi=150, bbox_inches="tight")
+
+    # Create prediction results table
+    output = df.iloc[split_index:].copy()
+
+    output = output[[
+        "canonical_product_id",
+        "canonical_name",
+        "unified_category",
+        "store",
+        "scraped_date_sg",
+        "price_sgd"
+    ]].copy()
+
+    output["predicted_price"] = y_pred
+    output["error"] = output["price_sgd"] - output["predicted_price"]
+    output["abs_error"] = output["error"].abs()
+
+    # Display 20 rows
+    print("\nProduct Predictions:")
+    print(output.head(10).to_string(index=False))
+
+    # =============================================================================
+    # Step 7: Summary
     # =============================================================================
     print("\n" + "=" * 60)
     print("PRICE PREDICTION SUMMARY")
     print("=" * 60)
-    print(f"No. of Products for training: {len(X_train)}")
-    print(f"No. of Products for testing: {len(X_test)}")
+    print(f"No. of rows for training: {len(X_train)}")
+    print(f"No. of rows for testing: {len(X_test)}")
     print(f"MAE (Test): ${mae:.3f}")
-    print(f"R²(Test): {r2:.4f}")
+    print(f"RMSE (Test): ${rmse:.3f}")
+    print(f"R² (Test): {r2:.4f}")
     print()
 
 if __name__ == "__main__":
