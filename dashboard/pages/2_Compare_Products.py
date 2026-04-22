@@ -268,6 +268,7 @@ if not top10_src.empty:
             y=[bar_label],
             x=[row["price_spread_sgd"]],
             orientation="h",
+            width=0.5,
             marker_color=STORE_COLORS.get(row["cheapest_store"], "#aaa"),
             text=f"  Save ${row['price_spread_sgd']:.2f}",
             textposition="outside",
@@ -280,11 +281,13 @@ if not top10_src.empty:
                 f"Save: ${row['price_spread_sgd']:.2f}<extra></extra>"
             ),
         ))
+    max_spread = top10_src["price_spread_sgd"].max() if not top10_src.empty else 1
     fig_top10.update_layout(
-        **{**PLOTLY_BASE, "margin": dict(t=10, b=10, l=10, r=110)},
+        **{**PLOTLY_BASE, "margin": dict(t=10, b=10, l=10, r=10)},
         showlegend=False,
         height=max(320, len(top10_src) * 36),
         xaxis_title="Price spread (SGD)",
+        xaxis=dict(range=[0, max_spread * 1.5]),
     )
     fig_top10.update_xaxes(gridcolor="#f0ede8", linecolor="#e0dbd2", zeroline=False)
     fig_top10.update_yaxes(gridcolor="rgba(0,0,0,0)", linecolor="rgba(0,0,0,0)")

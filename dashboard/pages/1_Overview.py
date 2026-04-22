@@ -187,10 +187,12 @@ st.divider()
 # Products Tracked = all canonical products seen today (incl. single-store)
 # Products You Can Compare = subset matched across 2+ stores today
 
+total_tracked = df_prices["canonical_product_id"].nunique() if not df_prices.empty else len(df)
+
 c1, c2, c3, c4 = st.columns(4)
 c1.metric(
     "Products Tracked",
-    f"{len(df):,}",
+    f"{total_tracked:,}",
     help="All canonical products seen today across any store"
 )
 c2.metric(
@@ -207,6 +209,137 @@ c4.metric("Categories", f"{df['unified_category'].nunique()}")
 
 st.divider()
 
+# ── STORE DISCOUNT ACTIVITY ───────────────────────────────────────────────────
+
+st.markdown(
+    "<div class='section-header'>Store discount activity today across all tracked products</div>",
+    unsafe_allow_html=True
+)
+st.markdown(
+    "<div class='section-sub'>"
+    "Products currently discounted from their original price — includes all tracked products, not just cross-store matches"
+    "</div>",
+    unsafe_allow_html=True
+)
+
+if not df_prices.empty and "original_price_sgd" in df_prices.columns:
+    disc_df = df_prices[
+        df_prices["discount_sgd"].notna() & (df_prices["discount_sgd"] > 0)
+    ].copy()
+    disc_df["discount_pct"] = (
+        disc_df["discount_sgd"] / disc_df["original_price_sgd"] * 100
+    ).round(1)
+
+    if not disc_df.empty:
+
+        disc_summary = (
+            disc_df.groupby("store")
+            .agg(
+                discounted_products=("canonical_product_id", "nunique"),
+                avg_discount=("discount_sgd", "mean"),
+                max_discount=("discount_sgd", "max"),
+            )
+            .reset_index()
+            .sort_values("discounted_products", ascending=False)
+        )
+        disc_summary["store_label"] = disc_summary["store"].map(STORE_LABELS).fillna(
+            disc_summary["store"]
+        )
+
+        top_disc = disc_summary.iloc[0]
+        st.markdown(
+            f"<div class='insight-box'>"
+            f"<b>{top_disc['store_label']}</b> has the most active promotions today — "
+            f"<b>{top_disc['discounted_products']:,}</b> products discounted from their "
+            f"original price, with an average discount of "
+            f"<b>${top_disc['avg_discount']:.2f}</b>."
+            f"</div>",
+            unsafe_allow_html=True
+        )
+
+        fig_disc = go.Figure()
+        for _, row in disc_summary.iterrows():
+            fig_disc.add_trace(go.Bar(
+                x=[row["store_label"]],
+                y=[row["discounted_products"]],
+                marker_color=STORE_COLORS.get(row["store"], "#aaa"),
+                text=f"{row['discounted_products']:,}<br>avg ${row['avg_discount']:.2f} off",
+                textposition="outside",
+                textfont=dict(color="#1a1a1a", size=12, family="DM Sans"),
+                name=row["store_label"],
+                hovertemplate=(
+                    f"<b>{row['store_label']}</b><br>"
+                    f"Discounted products: {row['discounted_products']:,}<br>"
+                    f"Avg discount: ${row['avg_discount']:.2f}<br>"
+                    f"Max discount: ${row['max_discount']:.2f}<extra></extra>"
+                ),
+            ))
+
+        fig_disc.update_layout(
+            **{**PLOTLY_BASE, "margin": dict(t=60, b=20, l=10, r=20)},
+            showlegend=False,
+            height=300,
+            yaxis_title="Number of discounted products",
+        )
+        apply_base_axes(fig_disc)
+        fig_disc.update_xaxes(gridcolor="rgba(0,0,0,0)", linecolor="rgba(0,0,0,0)")
+        st.plotly_chart(fig_disc, use_container_width=True)
+
+        st.caption(
+            "Counts all tracked products where current price is below original/RRP — "
+        )
+
+        st.divider()
+
+        st.markdown("<div class='section-header'>Top 10 biggest discounts today</div>", unsafe_allow_html=True)
+        st.caption(
+            "Ranked by absolute discount (SGD). "
+            "Includes all tracked products. "
+        )
+
+        top10 = (
+            disc_df.sort_values("discount_sgd", ascending=False)
+            .drop_duplicates("canonical_product_id")
+            .head(10)
+            .reset_index(drop=True)
+        )
+
+        top10["store_label"] = top10["store"].map(STORE_LABELS).fillna(top10["store"])
+
+        display_top10 = top10[[
+            "canonical_name", "unified_category",
+            "store_label",
+            "original_price_sgd", "price_sgd",
+            "discount_sgd", "discount_pct",
+        ]].copy()
+
+        display_top10["original_price_sgd"] = display_top10["original_price_sgd"].apply(
+            lambda x: f"${x:.2f}"
+        )
+        display_top10["price_sgd"] = display_top10["price_sgd"].apply(
+            lambda x: f"${x:.2f}"
+        )
+        display_top10["discount_sgd"] = display_top10["discount_sgd"].apply(
+            lambda x: f"${x:.2f}"
+        )
+        display_top10["discount_pct"] = display_top10["discount_pct"].apply(
+            lambda x: f"{x:.1f}%"
+        )
+
+        display_top10.columns = [
+            "Product", "Category",
+            "Store",
+            "Original Price", "Current Price",
+            "You Save", "Discount %",
+        ]
+        st.dataframe(display_top10, use_container_width=True, hide_index=True)
+
+    else:
+        st.info("No discounted products found today.")
+else:
+    st.info("Price data not available.")
+
+st.divider()
 
 # ── WHERE TO SHOP TODAY ───────────────────────────────────────────────────────
 
@@ -322,138 +455,6 @@ fig2.update_xaxes(side="bottom", gridcolor="rgba(0,0,0,0)", linecolor="rgba(0,0,
 fig2.update_yaxes(gridcolor="rgba(0,0,0,0)", linecolor="rgba(0,0,0,0)")
 fig2.update_traces(textfont_size=13)
 st.plotly_chart(fig2, use_container_width=True)
-
-st.divider()
-
-# ── STORE DISCOUNT ACTIVITY ───────────────────────────────────────────────────
-
-st.markdown(
-    "<div class='section-header'>Store discount activity today across all tracked products</div>",
-    unsafe_allow_html=True
-)
-st.markdown(
-    "<div class='section-sub'>"
-    "Products currently discounted from their original price — includes all tracked products, not just cross-store matches"
-    "</div>",
-    unsafe_allow_html=True
-)
-
-if not df_prices.empty and "original_price_sgd" in df_prices.columns:
-    disc_df = df_prices[
-        df_prices["discount_sgd"].notna() & (df_prices["discount_sgd"] > 0)
-    ].copy()
-    disc_df["discount_pct"] = (
-        disc_df["discount_sgd"] / disc_df["original_price_sgd"] * 100
-    ).round(1)
-
-    if not disc_df.empty:
-
-        disc_summary = (
-            disc_df.groupby("store")
-            .agg(
-                discounted_products=("canonical_product_id", "nunique"),
-                avg_discount=("discount_sgd", "mean"),
-                max_discount=("discount_sgd", "max"),
-            )
-            .reset_index()
-            .sort_values("discounted_products", ascending=False)
-        )
-        disc_summary["store_label"] = disc_summary["store"].map(STORE_LABELS).fillna(
-            disc_summary["store"]
-        )
-
-        top_disc = disc_summary.iloc[0]
-        st.markdown(
-            f"<div class='insight-box'>"
-            f"<b>{top_disc['store_label']}</b> has the most active promotions today — "
-            f"<b>{top_disc['discounted_products']:,}</b> products discounted from their "
-            f"original price, with an average discount of "
-            f"<b>${top_disc['avg_discount']:.2f}</b>."
-            f"</div>",
-            unsafe_allow_html=True
-        )
-
-        fig_disc = go.Figure()
-        for _, row in disc_summary.iterrows():
-            fig_disc.add_trace(go.Bar(
-                x=[row["store_label"]],
-                y=[row["discounted_products"]],
-                marker_color=STORE_COLORS.get(row["store"], "#aaa"),
-                text=f"{row['discounted_products']:,}<br>avg ${row['avg_discount']:.2f} off",
-                textposition="outside",
-                textfont=dict(color="#1a1a1a", size=12, family="DM Sans"),
-                name=row["store_label"],
-                hovertemplate=(
-                    f"<b>{row['store_label']}</b><br>"
-                    f"Discounted products: {row['discounted_products']:,}<br>"
-                    f"Avg discount: ${row['avg_discount']:.2f}<br>"
-                    f"Max discount: ${row['max_discount']:.2f}<extra></extra>"
-                ),
-            ))
-
-        fig_disc.update_layout(
-            **{**PLOTLY_BASE, "margin": dict(t=60, b=20, l=10, r=20)},
-            showlegend=False,
-            height=300,
-            yaxis_title="Number of discounted products",
-        )
-        apply_base_axes(fig_disc)
-        fig_disc.update_xaxes(gridcolor="rgba(0,0,0,0)", linecolor="rgba(0,0,0,0)")
-        st.plotly_chart(fig_disc, use_container_width=True)
-
-        st.caption(
-            "Counts all tracked products where current price is below original/RRP — "
-        )
-
-        st.divider()
-
-        st.markdown("<div class='section-header'>Top 10 biggest discounts today</div>", unsafe_allow_html=True)
-        st.caption(
-            "Ranked by absolute discount (SGD). "
-            "Includes all tracked products. "
-        )
-
-        top10 = (
-            disc_df.sort_values("discount_sgd", ascending=False)
-            .drop_duplicates("canonical_product_id")  # one row per product
-            .head(10)
-            .reset_index(drop=True)
-        )
-
-        top10["store_label"] = top10["store"].map(STORE_LABELS).fillna(top10["store"])
-
-        display_top10 = top10[[
-            "canonical_name", "unified_category",
-            "store_label",
-            "original_price_sgd", "price_sgd",
-            "discount_sgd", "discount_pct",
-        ]].copy()
-
-        display_top10["original_price_sgd"] = display_top10["original_price_sgd"].apply(
-            lambda x: f"${x:.2f}"
-        )
-        display_top10["price_sgd"] = display_top10["price_sgd"].apply(
-            lambda x: f"${x:.2f}"
-        )
-        display_top10["discount_sgd"] = display_top10["discount_sgd"].apply(
-            lambda x: f"${x:.2f}"
-        )
-        display_top10["discount_pct"] = display_top10["discount_pct"].apply(
-            lambda x: f"{x:.1f}%"
-        )
-
-        display_top10.columns = [
-            "Product", "Category",
-            "Store",
-            "Original Price", "Current Price",
-            "You Save", "Discount %",
-        ]
-        st.dataframe(display_top10, use_container_width=True, hide_index=True)
-
-    else:
-        st.info("No discounted products found today.")
-else:
-    st.info("Price data not available.")
 
 st.divider()
 
