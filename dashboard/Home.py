@@ -107,8 +107,8 @@ with c1:
         <div class='page-label'>Page 1</div>
         <h3>Overview</h3>
         <p>Store competitiveness at a glance — which store wins most often,
-        how prices spread across categories, match quality from the algorithm,
-        and historical price trends over time.</p>
+        discount activity across all tracked products, price spread by category,
+        and a savings potential summary.</p>
     </div>
     """, unsafe_allow_html=True)
 
@@ -118,8 +118,8 @@ with c2:
         <div class='page-label'>Page 2</div>
         <h3>Compare Products</h3>
         <p>Search any branded product and see exactly what each store charges today,
-        with price history over time and the algorithm's match confidence
-        shown per store pair.</p>
+        with price history over time and the top 10 biggest savings opportunities
+        across all comparable products.</p>
     </div>
     """, unsafe_allow_html=True)
 
@@ -131,6 +131,32 @@ with c3:
         <p>Meat, seafood, fruits and vegetables compared at the same pack size.
         Unit price per 100g per store, cheapest cut per category,
         and a full spread breakdown table.</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+st.markdown("<br>", unsafe_allow_html=True)
+
+c4, c5, _ = st.columns(3, gap="medium")
+
+with c4:
+    st.markdown("""
+    <div class='nav-card'>
+        <div class='page-label'>Page 4</div>
+        <h3>Price Tiers</h3>
+        <p>K-Means clustering segments every tracked product into Budget, Mid-range,
+        and Premium tiers — so you can see where each brand and category
+        sits in the market.</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+with c5:
+    st.markdown("""
+    <div class='nav-card'>
+        <div class='page-label'>Page 5</div>
+        <h3>Price Prediction</h3>
+        <p>Time-series forecasts for individual products — see where a product's
+        price is likely heading and whether now is a good time to stock up
+        or wait.</p>
     </div>
     """, unsafe_allow_html=True)
 

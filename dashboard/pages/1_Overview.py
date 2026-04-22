@@ -147,9 +147,34 @@ def load_prices_today():
         page += 1
     return pd.DataFrame(rows)
 
+@st.cache_data(ttl=300)
+def load_commodity_today():
+    client = get_client()
+    latest_res = client.table("commodity_price_comparisons").select("scraped_date").order("scraped_date", desc=True).limit(1).execute()
+    if not latest_res.data:
+        return pd.DataFrame()
+    latest = latest_res.data[0]["scraped_date"]
+    rows, page = [], 0
+    while True:
+        res = (
+            client.table("commodity_price_comparisons")
+            .select("cut,unified_category,cheapest_store,priciest_store,price_spread_sgd,scraped_date")
+            .eq("scraped_date", latest)
+            .range(page * 1000, (page + 1) * 1000 - 1)
+            .execute()
+        )
+        if not res.data:
+            break
+        rows.extend(res.data)
+        if len(res.data) < 1000:
+            break
+        page += 1
+    return pd.DataFrame(rows)
+
 with st.spinner("Loading..."):
     df = load_recs_today()
     df_prices = load_prices_today()
+    df_commodity = load_commodity_today()
 
 if df.empty:
     st.error("No data. Run the pipeline first.")
@@ -184,28 +209,41 @@ st.markdown(
 st.divider()
 
 # ── KPI CARDS ─────────────────────────────────────────────────────────────────
-# Products Tracked = all canonical products seen today (incl. single-store)
-# Products You Can Compare = subset matched across 2+ stores today
 
 total_tracked = df_prices["canonical_product_id"].nunique() if not df_prices.empty else len(df)
 
+def kpi_card(label, value, sub, accent):
+    return f"""
+    <div style="background:#fff; border:1px solid #ebe7e0; border-radius:10px;
+                padding:20px 22px; border-left:4px solid {accent};">
+        <div style="font-size:0.68rem; font-weight:600; letter-spacing:0.1em;
+                    text-transform:uppercase; color:#aaa; margin-bottom:8px;">{label}</div>
+        <div style="font-family:'DM Serif Display',serif; font-size:2rem;
+                    color:#1a1a1a; line-height:1.1; margin-bottom:6px;">{value}</div>
+        <div style="font-size:0.78rem; color:#bbb;">{sub}</div>
+    </div>"""
+
+avg_spread = f"${df['price_spread_sgd'].mean():.2f}" if not df.empty else "—"
+n_cats = df["unified_category"].nunique()
+
+st.markdown("<p style='font-size:0.72rem; font-weight:600; letter-spacing:0.1em; text-transform:uppercase; color:#ccc; margin-bottom:8px;'>Packaged products</p>", unsafe_allow_html=True)
 c1, c2, c3, c4 = st.columns(4)
-c1.metric(
-    "Products Tracked",
-    f"{total_tracked:,}",
-    help="All canonical products seen today across any store"
-)
-c2.metric(
-    "Products You Can Compare",
-    f"{comparable_count:,}",
-    help="Products available at 2 or more stores today — based on actual price data"
-)
-c3.metric(
-    "Avg Price Spread",
-    f"${df['price_spread_sgd'].mean():.2f}" if not df.empty else "—",
-    help="Average saving from choosing the cheapest over priciest store for the same product"
-)
-c4.metric("Categories", f"{df['unified_category'].nunique()}")
+c1.markdown(kpi_card("Products Tracked", f"{total_tracked:,}", "across all stores today", "#F5821F"), unsafe_allow_html=True)
+c2.markdown(kpi_card("Comparable", f"{comparable_count:,}", "available at 2+ stores", "#005BAC"), unsafe_allow_html=True)
+c3.markdown(kpi_card("Avg Price Spread", avg_spread, "cheapest vs priciest store", "#00843D"), unsafe_allow_html=True)
+c4.markdown(kpi_card("Categories", f"{n_cats}", "product categories", "#888"), unsafe_allow_html=True)
+
+if not df_commodity.empty:
+    comm_comparable = df_commodity[df_commodity["cheapest_store"].notna() & df_commodity["priciest_store"].notna()]
+    avg_comm_spread = f"${df_commodity['price_spread_sgd'].mean():.2f}" if df_commodity["price_spread_sgd"].notna().any() else "—"
+    n_comm_cats = df_commodity["unified_category"].nunique()
+
+    st.markdown("<p style='font-size:0.72rem; font-weight:600; letter-spacing:0.1em; text-transform:uppercase; color:#ccc; margin:18px 0 8px 0;'>Fresh &amp; commodity</p>", unsafe_allow_html=True)
+    d1, d2, d3, d4 = st.columns(4)
+    d1.markdown(kpi_card("Cuts Tracked", f"{len(df_commodity):,}", "fresh &amp; commodity cuts", "#F5821F"), unsafe_allow_html=True)
+    d2.markdown(kpi_card("Cuts Comparable", f"{len(comm_comparable):,}", "found at 2+ stores", "#005BAC"), unsafe_allow_html=True)
+    d3.markdown(kpi_card("Avg Commodity Spread", avg_comm_spread, "per cut today", "#00843D"), unsafe_allow_html=True)
+    d4.markdown(kpi_card("Commodity Categories", f"{n_comm_cats}", "commodity categories", "#888"), unsafe_allow_html=True)
 
 st.divider()
 
@@ -343,17 +381,22 @@ st.divider()
 
 # ── WHERE TO SHOP TODAY ───────────────────────────────────────────────────────
 
+_leadership_frames = [df_multi[["unified_category", "cheapest_store"]].dropna(subset=["cheapest_store"])]
+if not df_commodity.empty:
+    _leadership_frames.append(df_commodity[["unified_category", "cheapest_store"]].dropna(subset=["cheapest_store"]))
+df_combined_leadership = pd.concat(_leadership_frames, ignore_index=True)
+
 st.markdown("<div class='section-header'>Where to shop today</div>", unsafe_allow_html=True)
 st.markdown("<div class='section-sub'>Which store offers the lowest price most often across matched products</div>", unsafe_allow_html=True)
 
-if not df_multi.empty:
-    store_counts = df_multi["cheapest_store"].value_counts()
+if not df_combined_leadership.empty:
+    store_counts = df_combined_leadership["cheapest_store"].value_counts()
     top_store = store_counts.idxmax()
     top_store_label = STORE_LABELS.get(top_store, top_store)
-    top_pct = round(store_counts.iloc[0] / len(df_multi) * 100, 1)
+    top_pct = round(store_counts.iloc[0] / len(df_combined_leadership) * 100, 1)
 
     cat_winners = (
-        df_multi.groupby(["unified_category", "cheapest_store"])
+        df_combined_leadership.groupby(["unified_category", "cheapest_store"])
         .size().reset_index(name="count")
         .sort_values("count", ascending=False)
         .drop_duplicates("unified_category")
@@ -361,7 +404,7 @@ if not df_multi.empty:
     cat_parts = []
     for _, row in cat_winners.iterrows():
         store_label = STORE_LABELS.get(row["cheapest_store"], row["cheapest_store"])
-        cat_total = df_multi[df_multi["unified_category"] == row["unified_category"]].shape[0]
+        cat_total = df_combined_leadership[df_combined_leadership["unified_category"] == row["unified_category"]].shape[0]
         pct = round(row["count"] / cat_total * 100, 0) if cat_total > 0 else 0
         cat_parts.append(
             f"<b>{store_label}</b> for {row['unified_category']} ({pct:.0f}%)"
@@ -370,7 +413,7 @@ if not df_multi.empty:
     st.markdown(
         f"<div class='insight-box'>"
         f"Overall, <b>{top_store_label}</b> offers the lowest price on "
-        f"<b>{top_pct}%</b> of comparable products today."
+        f"<b>{top_pct}%</b> of comparable products today (including fresh &amp; commodity cuts)."
         f"<br>By category — {' &nbsp;·&nbsp; '.join(cat_parts[:4])}."
         f"</div>",
         unsafe_allow_html=True
@@ -379,8 +422,9 @@ if not df_multi.empty:
 # ── CHART 1: Price leadership by store — full width ───────────────────────────
 
 st.markdown("### Price leadership by store")
+st.caption("Combined across canonical products and fresh/commodity cuts")
 
-counts = df_multi["cheapest_store"].value_counts().reset_index()
+counts = df_combined_leadership["cheapest_store"].value_counts().reset_index()
 counts.columns = ["store", "count"]
 counts["label"] = counts["store"].map(STORE_LABELS).fillna(counts["store"])
 counts["pct"] = (counts["count"] / counts["count"].sum() * 100).round(1)
@@ -423,7 +467,7 @@ st.caption(
 )
 
 heat = (
-    df_multi.groupby(["unified_category", "cheapest_store"])
+    df_combined_leadership.groupby(["unified_category", "cheapest_store"])
     .size().reset_index(name="count")
 )
 pivot = heat.pivot(
@@ -461,7 +505,10 @@ st.divider()
 # ── SAVINGS POTENTIAL SUMMARY ─────────────────────────────────────────────────
 st.markdown("<div class='section-header'> Price Variation Summary</div>", unsafe_allow_html=True)
 if not df.empty:
-    spread_all = df["price_spread_sgd"].dropna()
+    _spread_frames = [df["price_spread_sgd"].dropna()]
+    if not df_commodity.empty:
+        _spread_frames.append(df_commodity["price_spread_sgd"].dropna())
+    spread_all = pd.concat(_spread_frames, ignore_index=True)
     total = len(spread_all)
     over_1 = (spread_all > 1).sum()
     over_2 = (spread_all > 2).sum()
