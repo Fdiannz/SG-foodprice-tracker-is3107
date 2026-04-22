@@ -83,6 +83,18 @@ def choose_preferred_row(rows: list[dict[str, Any]]) -> dict[str, Any]:
     )
 
 
+def assign_dense_price_ranks(rows: list[dict[str, Any]]) -> None:
+    current_rank = 0
+    last_price = None
+
+    for row in rows:
+        price = row["price_sgd"]
+        if last_price is None or price != last_price:
+            current_rank += 1
+            last_price = price
+        row["price_rank_for_day"] = current_rank
+
+
 def build_rows(category: Optional[str] = None):
     supabase = get_client()
     if not table_exists(supabase, "canonical_product_daily_prices") or not table_exists(
@@ -180,10 +192,11 @@ def build_rows(category: Optional[str] = None):
         priciest_price = priciest["price_sgd"]
         store_count = len({row["store"] for row in priced_rows if row.get("store")})
 
-        for rank, row in enumerate(priced_rows, start=1):
+        assign_dense_price_ranks(priced_rows)
+
+        for row in priced_rows:
             row["cheapest_price_for_day"] = cheapest_price
             row["highest_price_for_day"] = priciest_price
-            row["price_rank_for_day"] = rank
             row["price_gap_from_cheapest"] = round(row["price_sgd"] - cheapest_price, 4)
             row["is_cheapest_for_day"] = row["price_sgd"] == cheapest_price
             row["matched_store_count_for_day"] = store_count
