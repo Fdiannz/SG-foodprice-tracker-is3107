@@ -182,18 +182,7 @@ if df.empty:
 
 latest_date = df["scraped_date_sg"].max()
 
-# True cross-store count from df_prices (distinct stores per canonical product)
-if not df_prices.empty:
-    _store_counts = (
-        df_prices.groupby("canonical_product_id")["store"]
-        .nunique()
-        .reset_index()
-        .rename(columns={"store": "actual_store_count"})
-    )
-    comparable_count = int((_store_counts["actual_store_count"] >= 2).sum())
-    df = df.merge(_store_counts, on="canonical_product_id", how="left")
-else:
-    comparable_count = 0
+comparable_count = len(df)
 
 df_multi = df  # all products used for charts
 
@@ -556,7 +545,7 @@ st.markdown("<div class='section-sub'>Distribution of price spread across produc
 spread_df = df[
     df["price_spread_sgd"].notna() &
     (df["price_spread_sgd"] > 0) &
-    (df.get("actual_store_count", pd.Series(0, index=df.index)) >= 2)
+    (df["stores_seen_for_day"] >= 2)
 ].copy()
 
 if not spread_df.empty:
