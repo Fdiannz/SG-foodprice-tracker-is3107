@@ -127,6 +127,16 @@ def load_predictions():
 with st.spinner("Loading..."):
     results = load_predictions()
 
+    results["canonical_name"] = (
+        results["canonical_name"]
+        .astype(str)
+        .str.strip()
+        .str.replace("  ", " ")
+        .str.title()
+    )
+
+    results["product_search_name"] = results["canonical_name"].str.lower()
+
     st.markdown(
         """
         <div class='insight-box'>
