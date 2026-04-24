@@ -390,13 +390,25 @@ with st.spinner("Loading..."):
         filtered_preview["Deal Status"] == "Good deal"
     ].copy()
 
-    top = top.sort_values("Price Difference (%)").head(10)
-
     if top.empty:
         st.info("No good deals found for the selected filters.")
     else:
-        top["Savings from Expected Price (%)"] = -top["Price Difference (%)"]
-        top["Short Name"] = top["Product"].str.slice(0, 45) + "..."
+        top["Savings from Expected Price (%)"] = (
+            (top["Predicted Price (SGD)"] - top["Actual Price (SGD)"])
+            / top["Predicted Price (SGD)"]* 100).round(1)
+
+        top = top[
+            (top["Savings from Expected Price (%)"] > 0) &
+            (top["Savings from Expected Price (%)"] <= 100)
+        ]
+
+        top = top.sort_values("Savings from Expected Price (%)", ascending=False).head(10)
+        top = top.sort_values("Savings from Expected Price (%)", ascending=True)
+        top = top.drop_duplicates(subset=["Product", "Store"], keep="first")
+        top["Store Label"] = top["Store"].map(STORE_LABELS).fillna(top["Store"])
+
+        top["Short Name"] = (
+        top["Product"].str.slice(0, 38) + "... (" + top["Store Label"] + ")")
         top = top.sort_values("Savings from Expected Price (%)", ascending=True)
 
         fig = go.Figure()
@@ -405,24 +417,29 @@ with st.spinner("Loading..."):
             y=top["Short Name"],
             x=top["Savings from Expected Price (%)"],
             orientation="h",
+            width=0.9,
             text=top["Savings from Expected Price (%)"].round(1).astype(str) + "%",
             textposition="outside",
             marker_color="#178E4F",
+            cliponaxis=False,
             hovertemplate="<b>%{y}</b><br>Savings: %{x:.1f}%<extra></extra>",
         ))
 
         fig.update_layout(
-            **{**PLOTLY_BASE, "margin": dict(t=30, b=20, l=10, r=50)},
-            height=420,
+            **{**PLOTLY_BASE, "margin": dict(t=20, b=35, l=160, r=90)},
+            height=360,
             showlegend=False,
-            xaxis_title="Savings from Expected Price (%)",
+            xaxis_title="Savings from expected price (%)",
             yaxis_title="",
+            bargap=0.05,
         )
 
         apply_base_axes(fig)
-        fig.update_yaxes(
-            gridcolor="rgba(0,0,0,0)",
-            linecolor="rgba(0,0,0,0)"
+        max_saving = top["Savings from Expected Price (%)"].max()
+
+        fig.update_xaxes(
+            range=[0, max_saving * 1.15],
+            dtick=10,
         )
 
         st.plotly_chart(fig, use_container_width=True)
