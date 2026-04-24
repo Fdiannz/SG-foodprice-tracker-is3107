@@ -527,11 +527,15 @@ if not df.empty:
     )
 
     pct_worth = round((over_1 / total) * 100, 1) if total > 0 else 0
+    pct_zero = round((zero / total) * 100, 1) if total > 0 else 0
+    pct_small = round(100 - pct_worth - pct_zero, 1) if total > 0 else 0
+    small = total - over_1 - zero
     st.markdown(
         f"<div class='insight-box'>"
-        f"<b>{pct_worth}%</b> of all tracked products today have a price difference of more than $1 "
-        f"between stores — worth comparing before buying. "
-        f"The remaining {100 - pct_worth:.1f}% are priced similarly wherever you shop."
+        f"Out of <b>{total:,}</b> products compared across 2+ stores today: "
+        f"<b>{over_1:,} ({pct_worth}%)</b> have a price difference of more than $1 between stores — worth comparing before buying; "
+        f"<b>{small:,} ({pct_small}%)</b> have a small difference of $1 or less; "
+        f"and <b>{zero:,} ({pct_zero}%)</b> are priced identically everywhere."
         f"</div>",
         unsafe_allow_html=True
     )
